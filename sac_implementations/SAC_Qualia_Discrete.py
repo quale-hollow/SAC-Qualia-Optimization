@@ -61,12 +61,13 @@ class Args:
     target_entropy_scale: float = 0.89
     """coefficient for scaling the autotune entropy target"""
 
-    qualia_method: str = None   # "control", "PER", "VPER", "VPER_actor", "VBAL"
+    qualia_method: str = None # options: None (control), "VPER_actor_relu", "VPER_actor_exp", "VPER_both_relu", "VPER_both_exp"
     qualia_omega: float = 0.0
 
 
+
+
 def is_atari_env_id(env_id: str) -> bool:
-    """Crude but effective check: Atari NoFrameskip envs usually contain 'NoFrameskip'."""
     return env_id in ["Pong-v5",  "BeamRiderNoFrameskip-v4"]
 
 
@@ -298,11 +299,17 @@ def learn(args: Args, run_name=None):
         alpha = args.alpha
 
     # Set qualia method flags (avoid future repeated string comparisons)
-    VPER = args.qualia_method == "VPER"             # valence-prioritized experience replay (critic update)
-    VBAL = args.qualia_method == "VBAL"             # valence biased actor/attentional learning
+    VPER_actor_relu = (args.qualia_method == "VPER_actor_relu")
+    VPER_actor_exp = (args.qualia_method == "VPER_actor_exp")
+    VPER_actor = VPER_actor_relu or VPER_actor_exp
+
+    VPER_both_relu = (args.qualia_method == "VPER_both_relu")
+    VPER_both_exp = (args.qualia_method == "VPER_both_exp")
+    VPER_both = VPER_both_relu or VPER_both_exp
 
 
-    if VPER:
+    # REPLAY BUFFER SETUP
+    if VPER_actor or VPER_both:
         rb = PrioritizedReplayBuffer(
             args.buffer_size,
             envs.single_observation_space,
@@ -310,8 +317,8 @@ def learn(args: Args, run_name=None):
             device,
             n_envs=envs.num_envs,
             handle_timeout_termination=False,
-            alpha=0.6,                          # typical value
-            beta=0.4,                          # annealed from 0.4 to 1.0 (a typical approach)
+            alpha=args.qualia_omega,            
+            beta=0.4,                   # annealed from 0.4 to 1.0 (a typical approach)
             eps=1e-6
         )
     
@@ -370,18 +377,26 @@ def learn(args: Args, run_name=None):
         if global_step > args.learning_starts:
             if global_step % args.update_frequency == 0:
             
-                # 1. SAMPLING FROM REPLAY BUFFER FOR CRITIC UPDATE          
-                if VPER:
-                    # VPER: critic uses prioritized sampling + IS weights
+               # 1. SAMPLING FROM REPLAY BUFFER FOR CRITIC UPDATE          
+                if VPER_both:
+                    # Get IS weights
                     rb.beta = min(
                         1.0, rb.beta_start + global_step * (1.0 - rb.beta_start) / args.total_timesteps
                     )
+
+                    # prioritized sample from the buffer
                     data, idxs, is_weights = rb.sample_prioritized(args.batch_size)
-            
+
+                elif VPER_actor:
+                    # uniform sample from the replay --- sample uniform, no IS weights
+                    data, idxs = rb.sample_uniform(args.batch_size)
+                    is_weights = None
+                
                 else:
-                    # Plain ReplayBuffer (control, VBAL, etc.)
+                    # Plain ReplayBuffer (control)
                     data = rb.sample(args.batch_size)
                     idxs, is_weights = None, None
+
 
 
                 # ============================================================
@@ -407,7 +422,7 @@ def learn(args: Args, run_name=None):
 
 
                 # --- CRITIC LOSS (with IS weights only for PER/VPER critic) ---
-                if VPER:
+                if VPER_both:
                     qf1_loss_elementwise = F.mse_loss(qf1_a_values, next_q_value, reduction='none')
                     qf2_loss_elementwise = F.mse_loss(qf2_a_values, next_q_value, reduction='none')
                     qf1_loss = (qf1_loss_elementwise * is_weights.view(-1)).mean()
@@ -425,64 +440,44 @@ def learn(args: Args, run_name=None):
 
 
                 # === GET TD ERRORS, UPDATE REPLAY BUFFER PRIORITIES ===
-                with torch.no_grad():
-                    td_error1 = next_q_value - qf1_a_values
-                    td_error2 = next_q_value - qf2_a_values
-                    td_error = 0.5 * (td_error1 + td_error2) 
-            
-                    if VPER:
-                        # normal non-valence "surprisal" priority
-                        surprisal = td_error.abs()
-                        # valence based priority
-                        valence = torch.relu(td_error)
-                        # mixed priority --- omega is how much weight is moved to valence -- 0.0 is normal PER, 1.0 is fully valence
-                        priorities = ((1.0 - args.qualia_omega) * surprisal) + (args.qualia_omega * valence)
+                if VPER_both or VPER_actor:
+                    with torch.no_grad():
+                        td_error1 = next_q_value - qf1_a_values
+                        td_error2 = next_q_value - qf2_a_values
+                        td_error = 0.5 * (td_error1 + td_error2) 
+                        
+                        if VPER_actor_relu or VPER_both_relu:
+                            valence = torch.relu(td_error) + rb.eps
+                        
+                        else:
+                            valence = torch.clamp(torch.exp(td_error + rb.eps), max=1e6)
 
-                        rb.update_priorities(idxs, priorities)
+                        rb.update_priorities(idxs, valence)
 
-                    if VBAL:
-                        # redistribute "attention" to each sampled state based on TD errors
-                        # normalize to fix reward function dependence
-                        batch_mean = td_error.mean()
-                        batch_std = td_error.std() + 1e-6
-                        z_scored_td = (td_error - batch_mean) / batch_std
-                        scaled_td = args.qualia_omega * z_scored_td
-                        scaled_td = scaled_td - scaled_td.max()
-                        actor_update_attention = torch.softmax(scaled_td, dim=0)
-                        # Restore mean to 1.0 -- so we don't shrink learning rate and preserve "total update attention"
-                        actor_update_attention = actor_update_attention * args.batch_size
-                        actor_update_attention = actor_update_attention.detach()
-                    else:
-                        actor_update_attention = None
 
 
                 # ============================================================
                 # ACTOR UPDATE
                 # ============================================================
+
+                # For VPER-actor, resample an actor_data batch for the actor update
+                if VPER_actor:
+                    actor_data, _, _ = rb.sample_prioritized(args.batch_size)
+
+                else:
+                    actor_data = data
         
                 # Pre-update log_probs for logging
                 with torch.no_grad():
-                    pre_update_log_probs = actor.get_log_probs(data.observations, data.actions)
+                    pre_update_log_probs = actor.get_log_probs(actor_data.observations, actor_data.actions)
 
-                _, log_pi, action_probs = actor.get_action(data.observations)
+                _, log_pi, action_probs = actor.get_action(actor_data.observations)
                 with torch.no_grad():
-                    qf1_values = qf1(data.observations)
-                    qf2_values = qf2(data.observations)
+                    qf1_values = qf1(actor_data.observations)
+                    qf2_values = qf2(actor_data.observations)
                     min_qf_values = torch.min(qf1_values, qf2_values)
 
-
-                # average over actions for each state first
-                actor_loss_per_state = (action_probs * ((alpha * log_pi) - min_qf_values)).mean(dim=1)
-
-                # Get (weighted) actor loss
-                if VBAL:
-                    # VBAL: redistribute fixed total attention over samples
-                    # multiply average loss for each state by resaled TD error from the state/action sample
-                    actor_loss = (actor_loss_per_state * actor_update_attention).mean()
-
-                else:
-                    # standard SAC
-                    actor_loss = actor_loss_per_state.mean()
+                actor_loss = (action_probs * ((alpha * log_pi) - min_qf_values)).mean()
 
                 actor_optimizer.zero_grad()
                 actor_loss.backward()
@@ -500,7 +495,7 @@ def learn(args: Args, run_name=None):
                 
                 # LOG THE RATIO BETWEEN OLD AND NEW POLICY OVER THE REPLAY BUFFER ACTIONS
                 with torch.no_grad():
-                    post_update_log_probs = actor.get_log_probs(data.observations, data.actions)
+                    post_update_log_probs = actor.get_log_probs(actor_data.observations, actor_data.actions)
 
                 log_ratio = post_update_log_probs - pre_update_log_probs
                 replay_buffer_ratio = torch.exp(log_ratio).mean().item()

@@ -79,7 +79,7 @@ def run_experiment(environment, results_dir, method, omega, num_trials):
     # --------------------------------------------------
     # 1. Validate inputs
     # --------------------------------------------------
-    methods = ["control", "PER", "VPER", "VBAL", "VPER_actor"]
+    methods = ["control", "VPER_actor_relu", "VPER_both_relu", "VPER_actor_exp", "VPER_both_exp"]
     if method not in methods:
         raise ValueError(f"Method must be one of {methods}")
 

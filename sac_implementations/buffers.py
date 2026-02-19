@@ -867,20 +867,19 @@ class PrioritizedReplayBuffer(ReplayBuffer):
 
         return replay_samples, idxs_t, is_weights
 
-    def update_priorities(self, idxs: th.Tensor | np.ndarray, errors: th.Tensor | np.ndarray) -> None:
+    def update_priorities(self, idxs: th.Tensor | np.ndarray, prios: th.Tensor | np.ndarray) -> None:
         """
         Update priorities given flat indices and TD errors.
 
         :param idxs: flat indices in [0, capacity)
-        :param errors: TD errors (or per-sample loss) for each sampled transition
+        :param prios: priorities for each sampled transition
         """
         if isinstance(idxs, th.Tensor):
             idxs = idxs.detach().cpu().numpy()
-        if isinstance(errors, th.Tensor):
-            errors = errors.detach().cpu().numpy()
+        if isinstance(prios, th.Tensor):
+            prios = prios.detach().cpu().numpy()
 
-        errors = errors + self.eps
-        priorities = errors ** self.alpha
+        priorities = prios ** self.alpha
 
         for idx, p in zip(idxs, priorities):
             self.sum_tree.update(int(idx), float(p))
