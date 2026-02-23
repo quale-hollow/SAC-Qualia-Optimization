@@ -247,7 +247,7 @@ def plot_curves(methods, names, omegas, line_colors, path, env,
         ax[3].yaxis.set_major_formatter(plt.FuncFormatter(axes_labels))
 
         # ---------- plot control data ----------
-        control_suffix = " (SAC)"
+        control_suffix = " (standard SAC)"
         control_label = fr"$\omega={control_omega}$" if method != "VPER" else ""
         control_label += control_suffix
 
