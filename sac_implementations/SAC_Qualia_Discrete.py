@@ -61,7 +61,7 @@ class Args:
     target_entropy_scale: float = 0.89
     """coefficient for scaling the autotune entropy target"""
 
-    qualia_method: str = None # options: None (control), "VPER_actor_relu", "VPER_actor_exp", "VPER_both_relu", "VPER_both_exp"
+    qualia_method: str = None # options: None (control), "VPER_actor_relu", "VPER_actor_exp", "VPER_both_relu", "VPER_both_exp", "VWAU"
     qualia_omega: float = 0.0
 
 
@@ -299,6 +299,8 @@ def learn(args: Args, run_name=None):
         alpha = args.alpha
 
     # Set qualia method flags (avoid future repeated string comparisons)
+    VWAU = (args.qualia_method == "VWAU")
+
     VPER_actor_relu = (args.qualia_method == "VPER_actor_relu")
     VPER_actor_exp = (args.qualia_method == "VPER_actor_exp")
     VPER_actor = VPER_actor_relu or VPER_actor_exp
@@ -427,7 +429,7 @@ def learn(args: Args, run_name=None):
                     qf2_loss_elementwise = F.mse_loss(qf2_a_values, next_q_value, reduction='none')
                     qf1_loss = (qf1_loss_elementwise * is_weights.view(-1)).mean()
                     qf2_loss = (qf2_loss_elementwise * is_weights.view(-1)).mean()
-                # critic loss for non-prioritized experience replay for critic (control, VBAL, VPER_actor)
+                # critic loss for non-prioritized experience replay for critic (control, VWAU, VPER_actor)
                 else:
                     qf1_loss = F.mse_loss(qf1_a_values, next_q_value)
                     qf2_loss = F.mse_loss(qf2_a_values, next_q_value)
@@ -440,19 +442,29 @@ def learn(args: Args, run_name=None):
 
 
                 # === GET TD ERRORS, UPDATE REPLAY BUFFER PRIORITIES ===
-                if VPER_both or VPER_actor:
-                    with torch.no_grad():
-                        td_error1 = next_q_value - qf1_a_values
-                        td_error2 = next_q_value - qf2_a_values
-                        td_error = 0.5 * (td_error1 + td_error2) 
-                        
+                with torch.no_grad():
+                    td_error1 = next_q_value - qf1_a_values
+                    td_error2 = next_q_value - qf2_a_values
+                    td_error = 0.5 * (td_error1 + td_error2) 
+
+                    if VPER_both or VPER_actor:
                         if VPER_actor_relu or VPER_both_relu:
                             valence = torch.relu(td_error) + rb.eps
                         
                         else:
-                            valence = torch.clamp(torch.exp(td_error + rb.eps), max=1e6)
+                            valence = torch.clamp(torch.exp(td_error), max=1e6)
 
                         rb.update_priorities(idxs, valence)
+
+                    elif VWAU:
+                        scaled_td = args.qualia_omega * td_error
+                        scaled_td = scaled_td - scaled_td.max()
+                        actor_update_attention = torch.softmax(scaled_td, dim=0).detach()
+
+                    else:
+                        actor_update_attention = None
+
+
 
 
 
@@ -477,7 +489,18 @@ def learn(args: Args, run_name=None):
                     qf2_values = qf2(actor_data.observations)
                     min_qf_values = torch.min(qf1_values, qf2_values)
 
-                actor_loss = (action_probs * ((alpha * log_pi) - min_qf_values)).mean()
+                # average over actions for each state first
+                actor_loss_per_state = (action_probs * ((alpha * log_pi) - min_qf_values)).mean(dim=1)
+
+                # Get (weighted) actor loss
+                if VWAU:
+                    # VWAU: redistribute fixed total attention over samples
+                    # multiply average loss for each state by resaled TD error from the state/action sample
+                    actor_loss = torch.sum(actor_loss_per_state * actor_update_attention)
+
+                else:
+                    # standard SAC
+                    actor_loss = actor_loss_per_state.mean()
 
                 actor_optimizer.zero_grad()
                 actor_loss.backward()
