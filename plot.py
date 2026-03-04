@@ -47,7 +47,7 @@ if arg in ['all', 'cartpole']:
         path='results/cartpole_results',
         env="CartPole-v1",
         save_dir='sac_plots/cartpole/',
-        qe_lims=[0.0, 0.00005],
+        qe_lims=[0.0, 0.0001],
         NUM_TRIALS=100,
         NUM_BINS=100,
     )
@@ -90,9 +90,10 @@ if arg in ['all', 'pendulum']:
 
 if arg in ['all', 'halfcheetah']:
 
-    methods = ["VPER_actor_relu", "VPER_actor_exp_eps"]
+    methods = ["VPER_actor_relu", "VPER_actor_exp", "VWAU"]
     omegas = [
         [0.2, 0.4, 0.6, 0.8, 1.0], 
+        [0.2, 0.4, 0.6, 0.8, 1.0],
         [0.2, 0.4, 0.6, 0.8, 1.0],
     ]
 
@@ -101,8 +102,9 @@ if arg in ['all', 'halfcheetah']:
     line_colors = ['C1', 'C2', 'C3', 'C4', 'C5', 'C6', 'C7']
 
     names = [
-        "Valence-Prioritized Experience Replay (VPER) -- Linear Priorities, Actor Update Only",
+        "Valence-Prioritized Experience Replay (VPER) -- Linear Priorities, Actor Update Only",   
         "Valence-Prioritized Experience Replay (VPER) -- Exp. Priorities, Actor Update Only",
+        "Valence-Weighted Actor Update (VWAU)",
     ]
 
     plot_curves(
