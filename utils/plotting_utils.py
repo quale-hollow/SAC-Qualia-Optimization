@@ -17,7 +17,7 @@ def ci95_halfwidth(vals):
     return t.ppf(0.975, df=n - 1) * sem
 
 
-def load_all_stats(filepath, num_bins=100, max_trials=None, final_return_window=5):
+def load_all_stats(filepath, num_bins=100, max_trials=None):
     """
     Load all experiment stats (learning curves + final values for return & RQO)
     in a single pass over the .npz files in `filepath`.
