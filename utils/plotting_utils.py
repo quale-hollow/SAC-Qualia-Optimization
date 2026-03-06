@@ -228,18 +228,18 @@ def plot_curves(methods, names, omegas, line_colors, path, env,
         label_pad = 0
 
         ax[0].set_xlabel("Time Step", labelpad=label_pad)
-        ax[0].set_ylabel(r"Return", labelpad=label_pad)
+        ax[0].set_ylabel(r"$J(\theta)$", labelpad=label_pad)
         ax[0].xaxis.set_major_formatter(plt.FuncFormatter(axes_labels))
         ax[0].yaxis.set_major_formatter(plt.FuncFormatter(axes_labels))
 
         ax[1].set_xlabel("Time Step", labelpad=label_pad)
-        ax[1].set_ylabel(r"Per-Update $Q_k$", labelpad=label_pad)
+        ax[1].set_ylabel(r"$Q_k$", labelpad=label_pad)
         ax[1].xaxis.set_major_formatter(plt.FuncFormatter(axes_labels))
         if qe_lims is not None:
             ax[1].set_ylim(*qe_lims)
 
         ax[2].set_xlabel(r"$\omega$", labelpad=label_pad)
-        ax[2].set_ylabel("Final Return", labelpad=label_pad)
+        ax[2].set_ylabel(r"Final $J(\theta)$", labelpad=label_pad)
         ax[2].yaxis.set_major_formatter(plt.FuncFormatter(axes_labels))
 
         ax[3].set_xlabel(r"$\omega$", labelpad=label_pad)
