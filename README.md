@@ -39,25 +39,6 @@ The SAC interventions in this repo are:
 
 `omega` controls the strength of the qualia optimization mechanism.
 
-## Notation
-
-This README and code follow the paper's problem-setting notation:
-- `B_k`: batch used at policy update `k`
-- `Theta_{k-1}, Theta_k`: policy parameters before and after update `k`
-- `Q_k`: per-update qualia valence
-- `RQO`: cumulative reinforcement-qualia objective over updates
-- `omega`: qualia optimization strength parameter
-- `delta_i`: TD error for transition `i`
-
-Paper definition of per-update qualia valence:
-- `Q_k = (1/|B_k|) * sum_{t in B_k} (pi(S_t, A_t, Theta_k) / pi(S_t, A_t, Theta_{k-1}) - 1)`
-
-Paper definition of RQO:
-- `RQO = E[sum_{k=1..K} Q_k]`
-
-Empirical estimate used in this repo:
-- Per trial: `RQO_trial = sum_k Q_k`
-- Reported table value: mean of `RQO_trial` across trials (with 95% CI)
 
 ## Environment Setup
 
