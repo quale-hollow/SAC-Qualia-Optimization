@@ -17,7 +17,49 @@ def ci95_halfwidth(vals):
     return t.ppf(0.975, df=n - 1) * sem
 
 
-def load_all_stats(filepath, num_bins=100, max_trials=None):
+def bin_trials(trials, total_steps, num_bins=100, value_offset=0.0):
+    """
+    Trial-level learning curve over equal-width time step bins.
+
+    Each trial contributes one value per bin (the mean of its rows in that bin),
+    and the bin's mean and 95% CI are computed across those per-trial values.
+
+    Args:
+        trials: list of [T, 2] arrays with columns [global_step, value], one per trial.
+        value_offset: subtracted from each value (1.0 converts ratios to Q_k).
+
+    Returns:
+        bin_centers, mean_bins, ci95_bins
+    """
+    bin_width = total_steps / num_bins
+    per_trial = np.full((len(trials), num_bins), np.nan)
+
+    for i, rows in enumerate(trials):
+        rows = np.asarray(rows, dtype=np.float64)
+        rows = rows[np.isfinite(rows).all(axis=1)]
+        idx = np.clip((rows[:, 0] / bin_width).astype(int), 0, num_bins - 1)
+        counts = np.bincount(idx, minlength=num_bins)
+        sums = np.bincount(idx, weights=rows[:, 1] - value_offset, minlength=num_bins)
+        nonempty = counts > 0
+        per_trial[i, nonempty] = sums[nonempty] / counts[nonempty]
+
+    trials_per_bin = np.isfinite(per_trial).sum(axis=0)
+    if trials_per_bin.min() < len(trials):
+        print(f"Note: fewest trials in a bin is {trials_per_bin.min()} of {len(trials)} "
+              f"({np.sum(trials_per_bin < len(trials))} bins below the full count)")
+
+    bin_centers = (np.arange(num_bins) + 0.5) * bin_width
+    mean_bins = np.full(num_bins, np.nan)
+    ci95_bins = np.full(num_bins, np.nan)
+    for b in range(num_bins):
+        if trials_per_bin[b] > 0:
+            mean_bins[b] = np.nanmean(per_trial[:, b])
+            ci95_bins[b] = ci95_halfwidth(per_trial[:, b])
+
+    return bin_centers, mean_bins, ci95_bins
+
+
+def load_all_stats(filepath, total_steps, num_bins=100, max_trials=None):
     """
     Load all experiment stats (learning curves + final values for return & RQO)
     in a single pass over the .npz files in `filepath`.
@@ -29,8 +71,8 @@ def load_all_stats(filepath, num_bins=100, max_trials=None):
         - 'mean_final_rqo',    'ci95_final_rqo'
         - 'num_trials'
     """
-    returns_combined = np.empty((0, 2))
-    reinforcement_combined = np.empty((0, 2))
+    return_trials = []
+    ratio_trials = []
 
     final_returns = []
     qualia_returns = []
@@ -47,8 +89,8 @@ def load_all_stats(filepath, num_bins=100, max_trials=None):
         ratios = data["ratios"] # shape [T, 2]
 
         # accumulate for learning curves
-        returns_combined = np.vstack((returns_combined, ret))
-        reinforcement_combined = np.vstack((reinforcement_combined, ratios))
+        return_trials.append(ret)
+        ratio_trials.append(ratios)
 
         # final return for this trial
         final_returns.append(ret[-1, 1])
@@ -61,54 +103,10 @@ def load_all_stats(filepath, num_bins=100, max_trials=None):
     num_trials = len(final_returns)
 
     # ---- learning curves: environment return ----
-    returns_combined = returns_combined[returns_combined[:, 0].argsort()]
-    bin_size_ret = max(1, len(returns_combined) // num_bins)
-
-    ret_steps = np.zeros(num_bins)
-    ret_mean = np.zeros(num_bins)
-    ret_ci95 = np.zeros(num_bins)
-
-    for i in range(num_bins):
-        start = i * bin_size_ret
-        if start >= len(returns_combined):
-            # pad if we run out of data (e.g., too many bins)
-            ret_steps[i] = ret_steps[i - 1] if i > 0 else 0.0
-            ret_mean[i] = ret_mean[i - 1] if i > 0 else 0.0
-            ret_ci95[i] = 0.0
-            continue
-
-        end = len(returns_combined) if i == num_bins - 1 else min(len(returns_combined), (i + 1) * bin_size_ret)
-        chunk = returns_combined[start:end]
-
-        ret_steps[i] = np.mean(chunk[:, 0])
-        vals = chunk[:, 1]
-        ret_mean[i] = np.mean(vals)
-        ret_ci95[i] = ci95_halfwidth(vals)
+    ret_steps, ret_mean, ret_ci95 = bin_trials(return_trials, total_steps, num_bins=num_bins)
 
     # ---- learning curves: reinforcement / RQO per update ----
-    reinforcement_combined = reinforcement_combined[np.isfinite(reinforcement_combined).all(axis=1)]
-    reinforcement_combined = reinforcement_combined[reinforcement_combined[:, 0].argsort()]
-    bin_size_rq = max(1, len(reinforcement_combined) // num_bins)
-
-    rq_steps = np.zeros(num_bins)
-    rq_mean = np.zeros(num_bins)
-    rq_ci95 = np.zeros(num_bins)
-
-    for i in range(num_bins):
-        start = i * bin_size_rq
-        if start >= len(reinforcement_combined):
-            rq_steps[i] = rq_steps[i - 1] if i > 0 else 0.0
-            rq_mean[i] = rq_mean[i - 1] if i > 0 else 0.0
-            rq_ci95[i] = 0.0
-            continue
-
-        end = len(reinforcement_combined) if i == num_bins - 1 else min(len(reinforcement_combined), (i + 1) * bin_size_rq)
-        chunk = reinforcement_combined[start:end]
-
-        rq_steps[i] = np.mean(chunk[:, 0])
-        vals = chunk[:, 1] - 1.0
-        rq_mean[i] = np.mean(vals)
-        rq_ci95[i] = ci95_halfwidth(vals)
+    rq_steps, rq_mean, rq_ci95 = bin_trials(ratio_trials, total_steps, num_bins=num_bins, value_offset=1.0)
 
     # ---- final return stats ----
     final_returns = np.asarray(final_returns, dtype=np.float64)
@@ -161,7 +159,7 @@ def axes_labels(x, pos):
         return f"{x:.0f}"
 
 
-def plot_curves(methods, names, omegas, line_colors, path, env,
+def plot_curves(methods, names, omegas, line_colors, path, env, total_steps,
                 save_dir="plots", qe_lims=None, NUM_TRIALS=None, NUM_BINS=100):
 
     if not os.path.exists(save_dir):
@@ -194,7 +192,7 @@ def plot_curves(methods, names, omegas, line_colors, path, env,
 
     # ---------- CONTROL / BASELINE STATS ----------
     control_stats = load_all_stats(
-        f"{path}/control/omega_0.0/", num_bins=NUM_BINS, max_trials=NUM_TRIALS
+        f"{path}/control/omega_0.0/", total_steps, num_bins=NUM_BINS, max_trials=NUM_TRIALS
     )
     print("Count for baseline:", control_stats["num_trials"])
 
@@ -243,7 +241,7 @@ def plot_curves(methods, names, omegas, line_colors, path, env,
         ax[2].yaxis.set_major_formatter(plt.FuncFormatter(axes_labels))
 
         ax[3].set_xlabel(r"$\omega$", labelpad=label_pad)
-        ax[3].set_ylabel("Final RQO", labelpad=label_pad)
+        ax[3].set_ylabel("RQO", labelpad=label_pad)
         ax[3].yaxis.set_major_formatter(plt.FuncFormatter(axes_labels))
 
         # ---------- plot control data ----------
@@ -276,6 +274,7 @@ def plot_curves(methods, names, omegas, line_colors, path, env,
         for j, omega in enumerate(omegas[i]):
             stats = load_all_stats(
                 f"{path}/{method}/omega_{omega}/",
+                total_steps,
                 num_bins=NUM_BINS,
                 max_trials=NUM_TRIALS,
             )

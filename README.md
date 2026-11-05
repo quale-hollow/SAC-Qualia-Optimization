@@ -192,10 +192,10 @@ Plot/statistics details (`utils/plotting_utils.py`):
 - 95% confidence intervals use Student's t distribution:
   - `CI_95 half-width = t.ppf(0.975, df=n-1) * (sample_std(ddof=1) / sqrt(n))`
 - Time-step curves are built by:
-  - concatenating all trial rows for a metric,
-  - sorting by global step,
-  - binning into `NUM_BINS` contiguous bins,
-  - plotting bin mean with t-based 95% CI.
+  - dividing training into `NUM_BINS` equal-width bins over `total_steps`,
+  - averaging each trial's rows within each bin to get one value per trial,
+  - using the bin center as the x-value,
+  - plotting the mean across trials with t-based 95% CI (`n` = trials with data in that bin).
 - For `ratios`, plotting converts to per-update qualia valence via:
   - `Q_k = ratio_k - 1`
 - Final summary metrics used in tables:
