@@ -48,7 +48,13 @@ if arg in ['all', 'cartpole']:
         env="CartPole-v1",
         total_steps=500_000,
         save_dir='sac_plots/cartpole/',
-        qe_lims=[0.0, 0.0001],
+        qe_lims=[-0.00001, 0.0001],
+        # VPER with critic updates (linear priorities) has strongly negative Q_k,
+        # so both actor/critic figures share a wider range
+        qe_lims_by_method={
+            "VPER_both_relu": [-0.0017, 0.00065],
+            "VPER_both_exp": [-0.0017, 0.00065],
+        },
         NUM_TRIALS=100,
         NUM_BINS=100,
     )

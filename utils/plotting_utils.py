@@ -160,7 +160,12 @@ def axes_labels(x, pos):
 
 
 def plot_curves(methods, names, omegas, line_colors, path, env, total_steps,
-                save_dir="plots", qe_lims=None, NUM_TRIALS=None, NUM_BINS=100):
+                save_dir="plots", qe_lims=None, NUM_TRIALS=None, NUM_BINS=100,
+                qe_lims_by_method=None):
+    """
+    qe_lims sets the Q_k axis limits for every method; qe_lims_by_method
+    ({method: [low, high]}) overrides them for specific methods.
+    """
 
     if not os.path.exists(save_dir):
         os.mkdir(save_dir)
@@ -233,8 +238,9 @@ def plot_curves(methods, names, omegas, line_colors, path, env, total_steps,
         ax[1].set_xlabel("Time Step", labelpad=label_pad)
         ax[1].set_ylabel(r"$Q_k$", labelpad=label_pad)
         ax[1].xaxis.set_major_formatter(plt.FuncFormatter(axes_labels))
-        if qe_lims is not None:
-            ax[1].set_ylim(*qe_lims)
+        method_qe_lims = (qe_lims_by_method or {}).get(method, qe_lims)
+        if method_qe_lims is not None:
+            ax[1].set_ylim(*method_qe_lims)
 
         ax[2].set_xlabel(r"$\omega$", labelpad=label_pad)
         ax[2].set_ylabel(r"Final $J(\theta)$", labelpad=label_pad)
