@@ -1,7 +1,18 @@
 import os
+import re
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.stats import t
+
+
+# Fixed panel geometry shared by every per-method figure (instead of constrained_layout and
+# tight bounding boxes), so all figures have the same size and panel positions and line up
+# when stacked in the paper. Margins are fractions of the figure; YLABEL_X places every
+# y-axis label at the same offset from its axis (in axes coordinates).
+FIG_HEIGHT_RATIO = 0.28
+PANEL_MARGINS = dict(left=0.095, right=0.99, bottom=0.33, top=0.83, wspace=0.75)
+YLABEL_X = -0.46
+LEGEND_PAD = 0.03
 
 
 # ----------------------------
@@ -15,6 +26,16 @@ def ci95_halfwidth(vals):
         return 0.0
     sem = np.std(vals, ddof=1) / np.sqrt(n)
     return t.ppf(0.975, df=n - 1) * sem
+
+
+def pm(mean, ci, decimals=2):
+    """Table entry 'mean ± ci' fully in math mode, so negatives get a true minus sign."""
+    return f"${mean:.{decimals}f} \\pm {ci:.{decimals}f}$"
+
+
+def table_name(name):
+    """Shorten 'Valence-Prioritized Experience Replay (VPER) -- ...' to 'VPER -- ...'."""
+    return re.sub(r"^[^(]*\((\w+)\)", r"\1", name)
 
 
 def bin_trials(trials, total_steps, num_bins=100, value_offset=0.0):
@@ -59,6 +80,57 @@ def bin_trials(trials, total_steps, num_bins=100, value_offset=0.0):
     return bin_centers, mean_bins, ci95_bins
 
 
+def trial_finals(ret, ratios):
+    """Final (last-episode) return and RQO (sum of Q_k = ratio - 1) for one trial."""
+    ratios_clean = ratios[np.isfinite(ratios).all(axis=1)]
+    return ret[-1, 1], np.sum(ratios_clean[:, 1] - 1.0)
+
+
+def get_condition_finals(filepath, max_trials=None):
+    """Mean and 95% CI of final return and RQO across trials, without binning curves."""
+    files = sorted(os.listdir(filepath))[:max_trials]
+    finals = []
+    for fname in files:
+        data = np.load(os.path.join(filepath, fname))
+        finals.append(trial_finals(data["returns"], data["ratios"]))
+    final_returns, rqos = np.asarray(finals, dtype=np.float64).T
+    return (np.mean(final_returns), ci95_halfwidth(final_returns),
+            np.mean(rqos), ci95_halfwidth(rqos))
+
+
+def plot_tradeoff(ax, path, methods, names, omegas, title, NUM_TRIALS=None):
+    """
+    Final return vs RQO for each method, removing omega from the comparison.
+    Each method's line starts at standard SAC and follows its omegas in increasing order.
+    """
+    method_styles = [("C1", "s"), ("C2", "^"), ("C3", "D")]
+
+    bl = get_condition_finals(f"{path}/control/omega_0.0/", NUM_TRIALS)
+
+    for i, method in enumerate(methods):
+        color, marker = method_styles[i]
+        points = [bl] + [
+            get_condition_finals(f"{path}/{method}/omega_{omega}/", NUM_TRIALS)
+            for omega in omegas[i]
+        ]
+        ret, ret_ci, rqo, rqo_ci = map(np.array, zip(*points))
+        # The baseline point's error bars are drawn once, in blue, below
+        ret_ci[0], rqo_ci[0] = 0.0, 0.0
+        ax.errorbar(ret, rqo, xerr=ret_ci, yerr=rqo_ci, fmt=f"-{marker}", color=color,
+                    linewidth=0.8, markersize=3, elinewidth=0.6, capsize=1, label=names[i])
+
+    ax.errorbar(bl[0], bl[2], xerr=bl[1], yerr=bl[3], fmt="o", color="C0",
+                markersize=4, elinewidth=0.6, capsize=1, label="Standard SAC", zorder=3)
+    # Standard SAC's return: curves that rise while staying near this line lose the least performance
+    ax.axvline(bl[0], color="C0", linestyle="--", linewidth=0.6, alpha=0.6, zorder=0)
+
+    ax.set_title(title, fontsize=8)
+    ax.set_xlabel(r"Final $J(\theta)$", labelpad=0)
+    ax.set_ylabel("RQO", labelpad=2)
+    ax.xaxis.set_major_formatter(plt.FuncFormatter(axes_labels))
+    ax.yaxis.set_major_formatter(plt.FuncFormatter(axes_labels))
+
+
 def load_all_stats(filepath, total_steps, num_bins=100, max_trials=None):
     """
     Load all experiment stats (learning curves + final values for return & RQO)
@@ -92,13 +164,9 @@ def load_all_stats(filepath, total_steps, num_bins=100, max_trials=None):
         return_trials.append(ret)
         ratio_trials.append(ratios)
 
-        # final return for this trial
-        final_returns.append(ret[-1, 1])
-
-        # final RQO / qualia return for this trial
-        ratios_clean = ratios[np.isfinite(ratios).all(axis=1)]
-        qualia_experiences = ratios_clean[:, 1] - 1.0
-        qualia_returns.append(np.sum(qualia_experiences))
+        final_return, rqo = trial_finals(ret, ratios)
+        final_returns.append(final_return)
+        qualia_returns.append(rqo)
 
     num_trials = len(final_returns)
 
@@ -144,19 +212,11 @@ def set_size(width, fraction=1, subplots=(1, 1)):
 
 
 def axes_labels(x, pos):
-    if x >= 1e9:
-        return x
-    if x >= 1e6:
-        return f"{x*1e-6:.0f}M"
-    elif x >= 1e3:
-        if x % 1000 == 0:
-            return f"{x*1e-3:.0f}K"
-        else:
-            return f"{x*1e-3:.1f}K"
-    elif x < 10:
-        return f"{x:.2f}"
-    else:
-        return f"{x:.0f}"
+    """Compact tick labels, e.g. -500, 0.25, 1.5K, 40M."""
+    for scale, suffix in ((1e6, "M"), (1e3, "K")):
+        if abs(x) >= scale:
+            return f"{x / scale:g}{suffix}"
+    return f"{x:g}"
 
 
 def plot_curves(methods, names, omegas, line_colors, path, env, total_steps,
@@ -174,7 +234,7 @@ def plot_curves(methods, names, omegas, line_colors, path, env, total_steps,
     inches_per_pt = 1 / 72.27
 
     fig_width = width * inches_per_pt
-    fig_height = fig_width * (1 / 4)
+    fig_height = fig_width * FIG_HEIGHT_RATIO
     layout = (1, 4)
     fig_dim = (fig_width, fig_height)
 
@@ -216,18 +276,17 @@ def plot_curves(methods, names, omegas, line_colors, path, env, total_steps,
 
     table1 = (
         "Standard SAC & N/A & "
-        f"{bl_final_return:.2f}$\\pm${bl_final_return_ci:.2f} & "
-        f"{bl_final_rqo:.2f}$\\pm${bl_final_rqo_ci:.2f} \\\\ \\midrule\n"
+        f"{pm(bl_final_return, bl_final_return_ci)} & "
+        f"{pm(bl_final_rqo, bl_final_rqo_ci)} \\\\ \\midrule\n"
     )
 
     # ---------- METHODS ----------
     for i, method in enumerate(methods):
         control_omega = 0.0
 
-        fig, ax = plt.subplots(
-            layout[0], layout[1], figsize=fig_dim, constrained_layout=True
-        )
-        fig.suptitle(names[i], fontsize=9)
+        fig, ax = plt.subplots(layout[0], layout[1], figsize=fig_dim)
+        fig.subplots_adjust(**PANEL_MARGINS)
+        fig.suptitle(names[i], fontsize=9, y=0.995)
         label_pad = 0
 
         ax[0].set_xlabel("Time Step", labelpad=label_pad)
@@ -324,11 +383,8 @@ def plot_curves(methods, names, omegas, line_colors, path, env, total_steps,
             rqo_ci = stats["ci95_final_rqo"]
 
             # add to tex table
-            table1 += (f"{names[i]} & " if j == 0 else "\t & ")
-            table1 += (
-                f"{omega} & {ret:.2f}$\\pm${ret_ci:.2f} & "
-                f"{rqo:.2f}$\\pm${rqo_ci:.2f} \\\\"
-            )
+            table1 += (f"{table_name(names[i])} & " if j == 0 else "\t & ")
+            table1 += f"{omega} & {pm(ret, ret_ci)} & {pm(rqo, rqo_ci)} \\\\"
             if j == len(omegas[i]) - 1:
                 table1 += "\\midrule"
             table1 += "\n"
@@ -343,6 +399,10 @@ def plot_curves(methods, names, omegas, line_colors, path, env, total_steps,
             labels,
             loc="lower center",
             mode="expand",
+            # span the panel row, so the legend lines up with the panels; LEGEND_PAD
+            # leaves a gap below it so stacked figures don't touch
+            bbox_to_anchor=(PANEL_MARGINS["left"], LEGEND_PAD,
+                            PANEL_MARGINS["right"] - PANEL_MARGINS["left"], 1),
             ncol=len(omegas[i]) + 1,
             columnspacing=1,
             handletextpad=0.2,
@@ -350,9 +410,10 @@ def plot_curves(methods, names, omegas, line_colors, path, env, total_steps,
             borderaxespad=0,
             frameon=False,
         )
-        fig.get_layout_engine().set(h_pad=0.01)
+        for a in ax:
+            a.yaxis.set_label_coords(YLABEL_X, 0.5)
 
-        plt.savefig(f"{save_dir}/{env}_{method}.pdf", format="pdf", bbox_inches="tight")
+        plt.savefig(f"{save_dir}/{env}_{method}.pdf", format="pdf")
         plt.clf()
 
     print("\n\n")

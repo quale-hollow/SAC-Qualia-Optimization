@@ -24,6 +24,7 @@ SAC-Qualia-Optimization/
 ├── sac_plots/                        # Generated PDFs
 ├── sac_experiment.py                 # Run a single SAC setting
 ├── plot.py                           # Generate paper plots + print LaTeX table rows
+├── plot_tradeoffs.py                 # Final return vs RQO across environments
 └── README.md
 ```
 
@@ -62,18 +63,15 @@ Optional but useful:
 
 ## Results Data
 
-Large result archives are hosted on Zenodo.
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.24513875.svg)](https://doi.org/10.5281/zenodo.24513875)
 
-- Zenodo record URL: `https://zenodo.org/records/18884071?preview=1&token=eyJhbGciOiJIUzUxMiJ9.eyJpZCI6IjY4YzZlYTY4LThhOGYtNDM4MC1hZTk5LTAyYjlhZWQzZjQxNiIsImRhdGEiOnt9LCJyYW5kb20iOiI1MWEwZTM4YjY1NTQzMmYwZmY3ODc0ZTYyM2VhMjhiMiJ9.QG6-BzDY3RizOZeEGJ7pbWrVFqItI8CGM_8yWAPFRv4eV4uYqGfTPGQREexHwLvqQEea8wEGN4FvdQ7Udq2aQA`
+SAC results are archived on Zenodo: [doi:10.5281/zenodo.24513875](https://doi.org/10.5281/zenodo.24513875)
 
-- Zenodo DOI: `10.5281/zenodo.18884071`
-
-Download and extract:
+Download and extract into the repository root (`results.zip` is about 7.3 GB):
 
 ```bash
-# Example:
-# wget -O results.zip "<Zenodo record URL>"
-# unzip results.zip -d .
+wget -O results.zip "https://zenodo.org/records/24513875/files/results.zip?download=1"
+unzip results.zip -d .
 ```
 
 After extraction, `results/` should include environment-specific folders such as:
@@ -188,6 +186,12 @@ Generated PDFs are written to:
 - `sac_plots/pendulum/`
 - `sac_plots/halfcheetah/`
 
+Plot final return (last episode) vs RQO for VPER (exponential and linear, actor update only) and VWAU in all three environments, saved to `sac_plots/all_envs_tradeoff.pdf`:
+
+```bash
+python plot_tradeoffs.py
+```
+
 Plot/statistics details (`utils/plotting_utils.py`):
 - 95% confidence intervals use Student's t distribution:
   - `CI_95 half-width = t.ppf(0.975, df=n-1) * (sample_std(ddof=1) / sqrt(n))`
@@ -198,6 +202,7 @@ Plot/statistics details (`utils/plotting_utils.py`):
   - plotting the mean across trials with t-based 95% CI (`n` = trials with data in that bin).
 - For `ratios`, plotting converts to per-update qualia valence via:
   - `Q_k = ratio_k - 1`
+- Each condition uses the first `NUM_TRIALS` file names (sorted), so curves, tables, and trade-off plots come from the same trials.
 - Final summary metrics used in tables:
   - Final return per trial: last logged episodic return (`ret[-1, 1]`)
   - Final RQO per trial: `sum_k (ratio_k - 1)`
